@@ -1,2 +1,2 @@
 # Airplane
-Perform customer segmentation on Airplane customer data taken from US
+Perform customer segmentation on Airline customer data taken from US
