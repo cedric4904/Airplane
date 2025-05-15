@@ -1,0 +1,888 @@
+---
+title: "Phân cụm khách hàng US Airways"
+author: "Nguyen Phuong Nam"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Mở đầu
+
+Trong bối cảnh cạnh tranh ngày càng gay gắt của ngành hàng không, việc thấu hiểu mức độ hài lòng của khách hàng trở thành yếu tố then chốt giúp các hãng nâng cao chất lượng dịch vụ và giữ chân khách hàng trung thành. Nghiên cứu này tập trung phân tích mức độ hài lòng của khách hàng đối với hãng hàng không US Airways thông qua 14 yếu tố liên quan đến trải nghiệm bay. Bằng cách ứng dụng Phân tích thành phần chính (PCA), phân cụm K-means và các kỹ thuật trực quan hóa dữ liệu, nghiên cứu nhằm khám phá các nhóm khách hàng đặc trưng, xác định điểm mạnh – điểm yếu trong dịch vụ hiện tại, từ đó đề xuất các hướng cải thiện cụ thể và hiệu quả hơn.
+
+# Tiền xử lý dữ liệu
+
+## Về bộ dữ liệu
+
+Dữ liệu được lấy từ trang web nguồn dữ liệu mở
+*"<https://www.kaggle.com/datasets/johndddddd/customer-satisfaction>"*
+của tác giả *John D*. Dữ liệu mô tả về mức độ hài lòng của khách hàng
+trong trải nghiệm dịch vụ chuyến bay của hãng hàng không *US Airways
+(Mỹ)*, khảo sát vào năm 2015. Thông tin về bộ dữ liệu được trình bày như
+sau:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(readr)
+desc <- "https://raw.githubusercontent.com/cedric4904/Airplane/refs/heads/main/data_dictionary.csv"
+data_dictionaty <- read_csv(desc)
+library(DT)
+datatable(data_dictionaty, caption = "Mô tả các biến trong tập dữ liệu")
+```
+
+## Nhập và xử lý dữ liệu
+
+### Nhập dữ liệu gốc
+
+Dữ liệu được cập nhật trực tiếp từ trang web *kaggle*. Tuy nhiên, nhằm
+giúp Rstudio ổn định, tác giả đã đưa về trang web *Github* làm trung
+gian (***Cần kết nối mạng khi chạy***) nhằm tránh các lỗi xảy ra khi
+crawl dữ liệu.
+
+```{r message=FALSE, warning=FALSE}
+library(readr)
+url <- "https://raw.githubusercontent.com/cedric4904/Airplane/refs/heads/main/airline_passenger_satisfaction.csv"
+airline_data <- read_csv(url)
+```
+
+Các thông tin cơ bản về bộ dữ liệu như sau
+
+```{r fig.width=10, warning=FALSE}
+library(skimr)
+skim(airline_data)
+```
+
+
+
+### Xử lý giá trị khuyết thiếu
+
+Như đã mô tả ở trên, bộ dữ liệu được sử dụng bao gồm 24 biến với 129880
+quan sát tương ứng. Trước hết, tác giả thực hiện kiểm tra số lượng giá
+trị khuyết thiếu (missing values), nhận thấy có 393 quan sát nhận giá
+trị khuyết, tác giả quyết định loại bỏ ra khỏi bộ dữ liệu.
+
+```{r}
+colSums(is.na(airline_data))
+```
+
+
+```{r}
+airline_data <- na.omit(airline_data)
+sum(is.na(airline_data))
+```
+
+Như vậy, dữ liệu đã không còn giá trị khuyết thiếu.
+
+### Xử lý các giá trị trùng lặp
+
+Tiếp đến, sử dụng ID của khách hàng, tác giả loại bỏ các giá trị trùng
+lặp ra khỏi bộ dữ liệu (Quan sát xuất hiện trên hai lần -\> loại).
+
+```{r}
+library(dplyr)
+airline_data$ID <- airline_data %>% distinct(airline_data$ID)
+```
+
+### Lọc ra các giá trị dùng để phân tích
+
+Với thông tin ban đầu của bộ dữ liệu, các biến có thang đo Likert mức độ
+hài lòng của khách hàng (1-5), có ghi nhận giá trị "0" - Not applicable,
+hay nói cách khác là không được ghi nhận. Để phục vụ cho các phân tích
+phía sau, tác giả chọn lọc ra các quan sát có giá trị lớn hơn 0 nhằm
+phân tích có thể chính xác và khách quan nhất. Dữ liệu lúc này còn
+119204 quan sát
+
+```{r}
+library(dplyr)
+airline_data <- airline_data %>%
+    filter(if_all(10:23, ~ .x > 0))
+```
+
+### Chọn 10% quan sát trong bộ dữ liệu
+
+Với quan sát là 119204 trong bộ dữ liệu, nếu như thực hiện cho các phân
+tích sau sẽ gây tốn bộ nhớ và rơi vào tình trạng treo máy bởi số lượng
+quan sát lớn, các phân tích cần tính toán rất lâu. Vì vậy, tác giả sẽ sử
+dụng 10% số lượng quan sát với phép chọn ngẫu nhiên không hoàn lại. Dữ
+liệu sau đó còn khoảng 11920 quan sát.
+
+```{r}
+library(dplyr)
+set.seed(123)
+airline_data <- sample_frac(airline_data, size = 0.1) #chon khong hoan lai
+skim(airline_data)
+```
+
+# Giảm chiều dữ liệu với PCA
+
+## Xử lý dữ liệu đầu vào cho PCA
+
+Phương pháp phân tích thành phần chính (PCA) là một trong những phương
+pháp phân tích dữ liệu đa chiều được sử dụng trong thống kê để giảm
+chiều dữ liệu. Mục đích của phương pháp này nhằm "cô đọng" nhưng cố gắng
+giảm thiểu sự mất mát của thông tin. Phạm vi áp dụng là biến định lượng
+hoặc biến định tính (với thang đo thứ bậc).
+
+Như vậy, với các thang sử dụng trong bộ dữ liệu là Likert 1 - 5 (Rất
+không hài lòng - Rất hài lòng), việc phân tích PCA là hoàn toàn phù hợp.
+Vì bộ dữ liệu có tới 14 câu hỏi liên quan tới mức độ hài lòng của khách
+hàng với các mục khác nhau liên quan tới trải nghiệm của khách hàng với
+dịch vụ máy bay ở US Airways, nên khi thực hiện phương pháp Kmeans (đề
+cập ở phần sau) sẽ gây ảnh hưởng rất lớn tới kết quả phân cụm, khi mà
+các câu hỏi có thể trùng lên nhau rất nhiều. Vì vậy, tác giả thực hiện
+phân tích PCA nhằm giảm chiều dữ liệu, tìm ra các nhân tố chung tiềm ẩn
+rồi thực hiện phương pháp phân tích sâu hơn.
+
+Dữ liệu được lọc ra bao gồm các biến thang đo, với tên gọi "data"
+
+```{r}
+library(dplyr)
+data <- airline_data %>% select(10:23)
+head(data)
+```
+
+## Kiểm tra sự phù hợp của dữ liệu phân tích
+
+### Hệ số tương quan
+
+Để áp dụng phân tích PCA thì các biến phải có liên hệ với nhau. Nếu hệ ố
+tương quan giữa các biến nhỏ thì PCA là không thích hợp. Do vậy, trước
+khi thực hiện PCA, ta cần đánh giá sơ bộ tương quan giữa các biến.Kết
+quả được trình bày ở đồ thị sau:
+
+```{r fig.height=8, fig.width=10, message=FALSE, warning=FALSE}
+library(corrplot)
+
+# Tính ma trận tương quan
+cor_mat <- cor(data, use = "complete.obs")
+
+# Vẽ heatmap
+corrplot(cor_mat, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45,tl.cex = 0.6, addCoef.col = "black", number.cex = 0.7,
+         col = colorRampPalette(c("blue", "white", "red"))(200))
+```
+
+Có thể thấy nhóm dịch vụ trên máy bay Food and Drink, In-flight Service,
+In-flight Entertainment, Cleanliness, Seat Comfort đều có tương quan từ
+trung bình đến khá với nhau (0.4 - 0.7), nhất là seat comfort và
+cleanliness \~ 0.7. Trái lại, tuy thấp nhưng cũng có mối tương quan nhất
+định giữa nhóm đặt vé, thủ tục như Ease of Online Booking, Departure
+Time, Gate Location có tương quan thấp nhưng vẫn có kết nối. Khảo sát sơ
+bộ gợi ý có khả năng sau khi thực hiện PCA sẽ tạo ra nhiều hơn 1 thành
+phần chính
+
+### Kiểm định Barlett và hệ số KMO
+
+Tuy nhiên, khi cỡ mẫu lớn như bộ dữ liệu đang phân tích thì hệ số tương
+quan có xu hướng giảm, hơn nữa trong PCA ngoài việc kiểm tra hệ số tương
+quan thì cũng cần kiểm tra tương quan giữa các biến và các biến ẩn (TPC)
+hay không. Vì vậy tác giả sử dụng kiểm định Bartlett và hệ số KMO để
+kiểm tra với tiêu chí:
+
+-   Hệ số KMO (Kaiser – Meyer – Olkin) phải đạt giá trị từ 0,5 đổ lên
+    (0,5 ≤ KMO ≤ 1) chứng tỏ phân tích nhân tố khám phá phù hợp với dữ
+    liệu thực (Hill, 2011).
+
+-   Kiểm định Bartlett có ý nghĩa thống kê (giá trị Sig. \< 0,05), điều
+    này có nghĩa là các biến quan sát có tương quan tuyến tính với nhân
+    tố đại diện.
+
+-- Kiểm định Bartlett
+
+```{r message=FALSE, warning=FALSE}
+library(psych)
+cortest.bartlett(data)
+```
+
+-- Hệ số KMO
+
+```{r}
+KMO(data)
+```
+
+Kiểm định Bartlett trả về kết quả p_value rất nhỏ (\~0), hay hệ số KMO
+chung (Overall MSA) = 0.78 ( \> 0.5), KMO của từng biến (MSA for each
+item) cũng đều từ 0.7 trở lên. Như vậy có đủ cơ sở để kết luận bộ dữ
+liệu là phù hợp để đưa vào phân tích PCA.
+
+## Thực hiện PCA
+
+### Lựa chọn số TPC giữ lại
+
+Quy tắc để giữ số lượng TPC như sau:
+
+ + Giá trị riêng lớn hơn giá trị trung bình, hay nếu dữ liệu đầu vào là ma trận hệ số tương quan thì cần lớn hơn 1. Ở đây hàm PCA đã tự động sử dụng ma trận hệ số tương quan, nên các giá trị riêng cần lớn hơn 1.
+ 
+ + Biểu đồ khuỷu tay: Số lượng thành phần chính được xác định tại điểm mà vượt quá nó thì các giá trị riêng còn lại là xấp xỉ nhau và tương đối nhỏ (Jollife, 2002; Peres-Neto và cộng sự, 2005)
+ 
+ + Số lượng phần trăm phương sai được giải thích bởi các thành phần chính lớn hơn 50%
+
+Kết quả PCA được trình bày như sau
+
+```{r message=FALSE, warning=FALSE}
+library(FactoMineR)
+library(factoextra)
+res.pca <- PCA(data, graph = FALSE)
+summary(res.pca)
+```
+
+
+```{r}
+fviz_eig(res.pca, addlabels = TRUE, ylim = c(0, 50))
+```
+
+
+-- Nhìn vào mục **Eigenvalue** ta có thông tin như sau: 
+
++ Các giá trị riêng của 4 Dim ban đầu đều lớn hơn 1
+
++ Tuy nhiên nhìn vào dòng **Cummulative %  of Var**, tới Dim thứ 3 thì phần trăm phương sai giải thích cho các dữ liệu đầu vào đạt ~60.675% ( > 50%), hay nói cách khác 3 trục thành phần chính đã giải thích tốt được 14 biến dữ liệu đầu vào. Điều này cũng được thể hiện rõ trên đồ thị **Scree plot** khi tới dim 4 trở đi, % phương sai giải thích đều có mức khá tương đồng với nhau.
+
+Như vậy, tác giả quyết định giữ lại 3 trục thành phần chính.
+
+
+### Nhóm các biến ban đầu vào thành phần chính
+
+Như đã đề cập ở trên, tác giả quyết định giữ lại 3 thành phần chính. Để nhằm phân loại 14 biến ban đầu vào các trục thành phần chính, tác giả sử dụng giá trị **contribute** được trích xuất từ mục **variables**. Contribute (hay CTR) là mức độ đóng góp của biến vào thành phần chính, để đánh giá mức độ đóng góp của mỗi biến đối với một thành phần chính là nhiều hay ít, cần so sánh giá trị CTR này giữa 3 TPC. Nếu giá trị lớn nhất thì đồng nghĩa với việc biến đó sẽ đóng góp tốt nhất vào thành chính đó, và từ đó hình thành nên cơ sở để sắp xếp biến vào trục TPC. Kết quả được trình bày như sau:
+
+
+```{r}
+#Lấy giá trị contribute
+var <- get_pca_var(res.pca)
+var$contrib[,1:3]
+```
+
+
+```{r}
+fviz_contrib(res.pca, choice = "var", axes = 1)
+fviz_contrib(res.pca, choice = "var", axes = 2)
+fviz_contrib(res.pca, choice = "var", axes = 3)
+```
+
+
+Dựa vào kết quả nhận được, tác giả phân tách và đặt tên 3 TPC mới như sau:
+
+-- Dim.1 – "Comfort & Boarding Experience" (Sự thoải mái và tiện lợi khi bay). Gồm
+các biến:
+
++ Check-in Service
+
++ Online Boarding
+
++ Seat Comfort
+
++ Cleanliness
+
++ In-flight Entertainment
+
+-- Dim.2 – "Logistics & Booking Convenience" (Thuận tiện Hành trình & Đặt vé). Gồm các biến:
+
++ Departure and Arrival Time
+
++ Ease of Online Booking
+
++ Gate Location
+
++ In-flight Wifi Service
+
+-- Dim.3 – "In-flight Service & Amenities" (Chất lượng dịch vụ chuyến bay). Gồm các biến:
+
++ On-board Service
+
++ Leg Room Service
+
++ Food and Drink
+
++ In-flight Service
+
++ Baggage Handling
+
+### Chuyển dữ liệu ban đầu sang không gian TPC mới
+
+Với dữ liệu ban đầu là định tính với thang đo thứ bậc, có hai cách để chuyển không gian sang thành phần chính mới (*Giáo trình phân tích dữ liệu NEU, 2022*). Tác giả chọn cách chuyển qua phép tính bằng cách nhân thành phần chính là vec-tơ giá trị riêng (eigenvector) với dữ liệu quy tâm hoặc chuẩn hóa đã chuyển vị. Theo cách tính này, giá trị mới là các nhân số có giá trị trung bình bằng 0, hay nói cách khác dữ liệu đã được chuẩn hóa. Nhằm phục vụ cho mục đích phân tích Kmeans Clustering ở sau (dữ liệu đầu vào cần chuẩn hóa), tác giả sẽ sử dụng cách tính này. Kết quả nhân số đã được tính sẵn ở hàm PCA và được trình bày ở mục **Individual**, kết quả 6 quan sát đầu sau khi chuyển như sau
+
+```{r}
+res.ind <- get_pca_ind(res.pca)  # lấy thông tin mục individual
+pc_scores_3d <- as.data.frame(res.ind$coord[, 1:3])  # chỉ lấy 3 thành phần đầu
+head(pc_scores_3d)
+```
+
+Sau khi có 3 thành phần chính mới, tác giả lưu tên là **pc_scores_3d** và đưa vào phân tích tiếp. 
+
+# Phân cụm khách hàng bằng Kmeans
+
+Đề xuất bởi J.MacQueen: Some Methods for Classification and analysis of multivariate observations - J. MacQueen (1967).
+
+Phân tích cụm là tên của một nhóm các kỹ thuật đa biến có mục tiêu chính là phân chia các đối tượng của tổng thể (hoặc mẫu) thành các nhóm (cụm - cluster) sao cho đối tượng trong cùng một nhóm (cụm) tương đối đồng nhất xét theo đặc tính được chọn để nghiên cứu. Nội bộ cụm có sự đồng nhất cao và có sự khác biệt lớn với các cụm  khác.
+
+Với mục tiêu nghiên cứu và phân tích của tác giả là muốn phân các nhóm trải khách hàng để qua đề xuất các biện pháp cải thiện dịch vụ và chất lượng chuyến bay của hãng hàng không US airline, nâng cao hiệu suất kinh doanh. Tuy nhiên, vì số lượng biến dùng để phần tích là 14, sẽ gây ảnh hưởng rất lớn tới kết quả phân cụm. Vì vậy ở trên tác giả đã thực hiện giảm chiều dữ liệu, nhóm các câu hỏi có tính chất tương đồng, từ đó phân cụm khách hàng dựa trên mức độ hài lòng của họ đối với nhóm trải nghiệm ấy. 
+
+Như vậy ở phần này tác giả sẽ dùng 3 TPC đã trích xuất được từ trên, sau đó phân cụm theo sự tương đồng giữa giữa khoảng hơn 11 nghìn khách hàng ban đầu. Phương pháp Phân cụm sử dụng sẽ là Kmeans, một phương pháp phân cụm phân đoạn, phù hợp với các dữ liệu định lượng hoặc định tính với thang đo thứ bậc. 
+
+
+## Kiểm tra sự phù hợp của dữ liệu 
+
+Để xác định xem dữ liệu có phù hợp cho phân tích cụm hay không, tác giả sử dụng hệ số hopkins. Điều kiện là phải lớn hơn 0.5. Tính chỉ số Hopkins xem xét về khả năng phân nhóm của dữ liệu, cũng như vẽ ma trận khoảng cách (matrix distance), chỉ số hopskin có giá trị trong khoảng [-1,1], chỉ số càng hướng về 1 biểu thị khả năng tập dữ liệu có khả năng phân nhóm.
+
+Tuy nhiên, vì bộ dữ liệu khá lớn (~12k quan sát), vì vậy lệnh sử dụng hopkins khó có thể đáp ứng được bởi nó khó khá nhạy với dữ liệu có quan sát lớn. Vì vậy, tác giả lấy sample khoảng 1000 quan sát để kiểm tra.
+
+
+```{r warning=FALSE}
+
+library(hopkins)
+library (cluster)
+library (factoextra)
+library (fpc)
+ 
+# Lấy ngẫu nhiên 1000 dòng để tính Hopkins 
+set.seed(42)  
+sample_indices <- sample(1:nrow(pc_scores_3d), 1000)
+subset_data <- pc_scores_3d[sample_indices, ]
+
+library(hopkins)
+hopkins(subset_data)
+```
+
+Hệ số Hopkins gần với 1, như vậy dữ liệu là phù hợp để phân tích Kmeans clustering
+
+## Lựa chọn số cụm hợp lý
+
+VỚi phương pháp phân cụm phân đoạn, để lựa chọn số cụm hợp lý, tác giả sẽ kết hợp 3 phương pháp sau,
+
+ + Trực quan khoảng cách giữa các cụm 
+ 
+ + Đồ thị Silhouette và Elbow (phương pháp khuỷu tay)
+ 
+Tác giả không sử dụng phương pháp Gap bởi dữ liệu lớn, hàm Gap tính toán cần bộ nhớ lớn hơn nên rất khó thực hiện. Kết quả được trình bày như sau
+
+-- Đồ thị trực quan
+
+```{r message=FALSE, warning=FALSE}
+kmean_calc <- function(df, k){
+  kmeans(df, centers = k, nstart = 30)
+}
+km2 <- kmean_calc(pc_scores_3d, 2)
+km3 <- kmean_calc(pc_scores_3d, 3)
+km4 <- kmean_calc(pc_scores_3d, 4)
+km5 <- kmean_calc(pc_scores_3d, 5)
+km6 <- kmean_calc(pc_scores_3d, 6)
+km7 <- kmean_calc(pc_scores_3d, 7)
+ 
+p1 <- fviz_cluster(km2, data = pc_scores_3d, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 2") 
+p2 <- fviz_cluster(km3, data = pc_scores_3d, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 3")
+p3 <- fviz_cluster(km4, data = pc_scores_3d, ellipse.type= "convex") + theme_minimal() + ggtitle("k = 4")
+p4 <- fviz_cluster(km5, data = pc_scores_3d, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 5")
+p5 <- fviz_cluster(km6, data = pc_scores_3d, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 6")
+p6 <- fviz_cluster(km7, data = pc_scores_3d, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 7")
+ 
+library(cowplot)
+ 
+library(ggplot2)
+ 
+ 
+plot_grid(p1, p2, p3, p4, p5, p6, labels = c("k2", "k3", "k4", "k5", "k6", "k7")) 
+```
+
+-- Elbow và Silhouette
+
+```{r message=FALSE, warning=FALSE}
+# vẽ đồ thị xác định số cụm
+## Dựa vào Elbow
+fviz_nbclust(pc_scores_3d, kmeans, method = "wss", k.max = 10) + theme_minimal() + ggtitle("the Elbow Method")
+ 
+### pp Silhouette
+fviz_nbclust(pc_scores_3d, kmeans, method = "silhouette", k.max = 10) + theme_minimal() + ggtitle("The Silhouette Plot")
+```
+
+
+Trước hết, nhìn vào đồ thị trực quan với các cụm phân chia khác nhau khác nhau (khoảng từ 2 - 7), có thể thấy được k = 2 và k = 3 là tối ưu bởi các quan sát được phân chia khá tách biệt, không bị trùng lặp lên nhau. Tiếp đến, ở đồ thị Elbow, từ cụm thứ 2 và 3 đã có sự gấp khúc rõ rệt. Cuối cùng, hệ số Silhouette cho thấy k = 2 là tối ưu nhất. 
+
+Tuy nhiên, vì tác giả mong muốn có thể phân chia làm 3 cụm ứng với 3 TPC được trích xuất, nên ở phần sau sẽ so sánh số cụm K = 2 và K = 3 
+
+cụm tốt nhất được chọn theo so sánh các tiêu chí sau:
+
++ Hệ số Silhouette trung bình, càng gần 1 càng tốt
+
++ Hệ số Dunn, càng lớn càng tốt
+
++ Hệ số BSS trong TSS, tức là tỷ trọng phương sai giữa các nhóm trong tổng phương sai. Nếu tỉ trọng càng lớn tức là các cụm càng tách biệt với nhau, hay nói cách khác chất lượng phân cụm là tốt.
+
+Kết quả được trình bày như sau:
+
+
+```{r}
+kmean3<- kmeans (pc_scores_3d, centers=3, nstart=10)# 3 cụm(nstart represents the number of random data sets used to run the algorithm)
+str(kmean3)
+summary(kmean3)
+# Hiển thị thông tin tổng quan:
+cat("Within-cluster sum of squares:\n")
+print(kmean3$withinss)
+
+cat("\nCluster centers:\n")
+print(kmean3$centers)
+
+cat("\nSize of each cluster:\n")
+print(kmean3$size)
+```
+
+
+```{r}
+k_stats3 <- cluster.stats(dist(pc_scores_3d), kmean3$cluster)
+k_stats3
+```
+
+
+```{r}
+kmean2<- kmeans (pc_scores_3d, centers=2, nstart=10)# 2 cụm(nstart represents the number of random data sets used to run the algorithm)
+str(kmean2)
+summary(kmean2)
+# Hiển thị thông tin tổng quan:
+cat("Within-cluster sum of squares:\n")
+print(kmean2$withinss)
+
+cat("\nCluster centers:\n")
+print(kmean2$centers)
+
+cat("\nSize of each cluster:\n")
+print(kmean2$size)
+```
+
+
+```{r}
+k_stats2 <- cluster.stats(dist(pc_scores_3d), kmean2$cluster)
+k_stats2
+```
+
+
+```{r fig.width=12, message=FALSE, warning=FALSE}
+plotk2 <- fviz_cluster(kmean2, data = pc_scores_3d, geom = "point", eclipse.type = "convex", repel = TRUE)
+plotk3 <- fviz_cluster(kmean3, data = pc_scores_3d, geom = "point", eclipse.type = "convex", repel = TRUE)
+
+#
+library(gridExtra)
+grid.arrange(plotk2, plotk3, ncol = 2)
+```
+
+
+-- **Lựa chọn k cuối cùng**
+
+Theo tiêu chí ở trên, các kết quả được liệt kê như sau:
+
+Với **k = 3**: 
+
++ Hệ số dunn: 1.247535
+
++ Hệ số Silhouette:0.2864618
+
++ Tỷ trọng BSS/TSS: 48.6 % *
+
+Với **k = 2**:
+
++ Hệ số dunn: 1.473734 *
+
++ Hệ số Silhouette:0.3217819 *
+
++ Tỷ trọng BSS/TSS: 34.7 %
+
+*Lưu ý: Hệ số tối ưu hơn sẽ được đánh dấu* * 
+
+Như vậy, k = 2 đáp ứng nhiều tiêu chí hơn. Với k = 3 mặc dù các cụm có tách biệt hơn nhưng chất lượng phân cụm lại kém hơn. Bên cạnh đó, ở đồ thị trực quan, có thể thấy các quan sát ở k = 2 có sự tách biệt cũng khá tốt không bị trùng lặp lên quan sát khác. Vì vậy số cụm khách hàng phân chia sẽ là 2.
+
+-- **Đặt tên cụm**
+
+Dựa vào giá trị Cluster means là tọa độ của các tâm cụm như sau: 
+
+Cluster means:
+
+      Dim.1      Dim.2       Dim.3          Cluster
+      
+1 *-1.890133*  0.2323996  0.09481776           1
+
+2  1.450671  *-0.1783660* **-0.07277235**      2
+
+Với cụm 1 (Cluster 1)
+
++ Dim.1 = -1.89: là rất thấp. Như vậy khách hàng trong cụm này đánh giá kém **Sự thoải mái và tiện lợi khi bay**, bao gồm:
+
+Check-in Service
+
+Online Boarding
+
+Seat Comfort
+
+Cleanliness
+
+In-flight Entertainment
+
++ Dim 2 = 0.2323996 và Dim 3 = 0.09481776: Ngược lại so với Dim 1, như vậy có thể thấy khách hàng ở cụm này có mức hài lòng từ vừa phải đến nhẹ với **Thuận tiện Hành trình & Đặt vé** và **chất lượng dịch vụ trên máy bay**
+
+***=> Tên cụm: Cabin discomfort***: Đây là nhóm khách không hài lòng rõ rệt về sự thoải mái và tiện lợi khi lên máy bay, mặc dù vẫn thấy chấp nhận được về các khâu đặt vé và dịch vụ trên máy bay.
+
+Với cụm 2 nhìn chung thì kết quả sẽ ngược lại, cụ thể:
+
++ Dim 1 = 1.450671: Đánh giá tốt về **Sự thoải mái và tiện lợi khi bay** của máy bay
+
++ Dim 2 = - 0.1783660 và Dim 3 = -0.07277235, như vậy nhóm khách hàng này chưa hài lòng lắm với khâu đặt vé và dịch vụ ở trên máy bay.
+
+***=> Tên cụm:  Booking and Services discomfort***: Nhóm này hài lòng khá ổn với Sự thoải mái và tiện lợi khi bay, nhưng chưa hài lòng lắm với khâu làm thủ tục, đặt vé và dịch vụ trên máy bay.
+
+-- Gán nhãn cụm vào dữ liệu ban đầu
+
+```{r}
+# Thêm nhãn cụm vào dữ liệu PCA
+pc_scores_3d$Cluster <- kmean2$cluster
+# Gắn nhãn cụm vào dữ liệu ban đầu (airline_data)
+airline_data$Cluster <- pc_scores_3d$Cluster
+# Kiểm tra sự phân bố của biến "Satisfaction" theo cụm
+table(airline_data$Cluster, airline_data$Satisfaction)
+
+# Kiểm tra mô tả các biến khác theo cụm
+summary(airline_data[airline_data$Cluster == 1, ])  # Dữ liệu của cụm 1
+summary(airline_data[airline_data$Cluster == 2, ])  # Dữ liệu của cụm 2
+
+```
+
+
+# Phân tích đặc điểm của từng cụm 
+
+
+Ở mục này, sau khi phân cụm, tác giả sẽ phân tích một số đặc điểm phổ biến của từng cụm. Qua đó rút ra kết luận và đề xuất cuối cùng. Đầu tiên ta cần chuyển đổi kiểu biến cụm về dạng factor để có thể phân chia như sau:
+
+
+```{r echo=TRUE}
+airline_data$Cluster <- as.factor(airline_data$Cluster)
+```
+
+## Số lượng khách hàng của từng cụm
+
+
+Có thể thấy được số lượng khách hàng ở cụm 2 nhiều hơn cụm 1, với sự cách biệt khá lớn, khoảng hơn 1000 người. Như vậy trong số gần 12000 khách hàng được khảo sát, có tới khoảng 56.8% hài lòng mạnh mẽ với Sự thoải mái và tiện lợi khi bay của hãng hàng không US airline, nhưng chưa hài lòng lắm với khâu đặt vé hoặc dịch vụ online.
+
+
+```{r}
+library(ggplot2)
+ggplot(airline_data, aes(x=Cluster))+
+  geom_bar(fill="white",color="black")+
+  geom_text(stat = "count", aes(label = ..count..), vjust = -0.5) +
+  labs(x="Cụm", 
+      y="Số khách hàng",
+      title=" Số lượng khách hàng ở trong mỗi cụm") +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+## Các loại khách hàng phổ biến trong từng cụm
+
+Tỷ trọng khách hàng Returning (tức là sử dụng dịch vụ bay của US airway trên 2 lần) được tính toán như sau: 
+
++ Cụm 1: 78.6%
+
++ Cụm 2: 87.8%
+
+Như vậy nhóm cụm 2 có tỉ lệ khách hàng trung thành cao hơn, và nhóm này cảm thấy khá ổn với Sự thoải mái và tiện lợi khi bay. Đây có thể là một trong các yếu tố chính thu hút khách hàng quay trở lại sử dụng dịch vụ của hãng. 
+
+```{r}
+library(ggplot2)
+
+ggplot(airline_data, aes(x =Cluster, fill = `Customer Type`)) +
+    geom_bar(position = "dodge") + #các cột đặt cạnh nhau
+    geom_text(
+        stat = "count",
+        aes(label = ..count..),
+        position = position_dodge(width = 0.9), #Đảm bảo số nằm trên đúng cột tương ứng
+        vjust = -0.25 #Đặt nhãn lên phía trên đầu cột
+    ) +
+    labs(
+        x = "Cụm",
+        y = "Số lượng",
+        fill = "Loại khách hàng"
+    ) +
+    theme_minimal()
+```
+
+## Độ tuổi trung bình của hai cụm
+
+Nhìn chung thì cụm 1, khách hàng sẽ trẻ hơn một chút, tập trung từ khoảng 36-37 tuổi. Còn với nhóm còn lại là 40-42 tuổi. Có thể rút ra được insight cho thấy các thủ tục và dịch vụ booking vé còn chưa dễ dàng tiếp cận với người lớn tuổi, hay các dịch vụ trên máy bay còn chưa tốt để đáp ứng nhu cầu (đặc điểm của cụm 2)
+
+```{r}
+boxplot(Age ~ Cluster, data = airline_data, main = "Average Age by cluster", frame = FALSE, names=c("Cluster 1", "Cluster2"), col=c("#B2E0D4","#F4C2C2"))
+```
+
+## Các nhóm tuổi trong từng cụm
+
+Trước hết, tác giả Căn cứ theo thông tin của U.S. Census Bureau để phân chia các nhóm tuổi của khách hàng. Đường link:
+(<https://www.beresfordresearch.com/age-range-by-generation/>)
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Thông tin về các nhóm tuổi
+generation_table <- data.frame(
+  "Thế hệ" = c("Silent", "Baby Boomer", "Gen X", "Millennial", "Gen Z"),
+  "Năm sinh" = c("<=1945", "1946–1964", "1965–1980", "1981–1996", "1997–2008"),
+  "Độ tuổi năm 2015" = c(">=70", "51–69", "35–50", "19–34", "7–18"),
+  check.names = FALSE
+)
+
+# Hiển thị bảng
+library(gt)
+
+generation_table %>%
+  gt() %>%
+  tab_header(title = "Bảng nhóm thế hệ và độ tuổi tương ứng (năm 2015)")
+```
+
+
+Sau đó tạo biến và vẽ biểu đồ tròn thể hiện tỉ trọng của từng nhóm: 
+
+```{r}
+# Tao bien
+airline_data <- airline_data %>%
+  mutate(age_group = case_when(
+    Age >= 7 & Age <= 18 ~ "GenZ",
+    Age > 18 & Age <= 34 ~ "Millenials",
+    Age > 34 & Age <= 50 ~ "GenX",
+    Age > 50 & Age <= 69 ~ "Baby Boomer",
+    Age > 69 ~ "Silent",
+     TRUE ~ NA_character_ ),
+    .before = 4)
+
+#Sap xep thu tu
+airline_data$age_group <- factor(airline_data$age_group, 
+                                 levels = c("GenZ", "Millenials", "GenX", "Baby Boomer", "Silent"))
+
+# kiem tra co Na khong
+sum(is.na(airline_data$age_group))
+
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+
+# Tính toán dữ liệu
+age_cluster_summary <- airline_data %>%
+  group_by(Cluster, age_group) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(Cluster) %>%
+  mutate(
+    percentage = count / sum(count) * 100,
+    label = ifelse(percentage < 5, "", paste0(round(percentage, 1), "%")) #Để lúc sau hiện trên pie chart các giá trị nhỏ không bị overlap
+  ) %>%
+  ungroup()
+
+# Màu sắc theo nhóm tuổi
+age_group_colors <- c(
+  "GenZ" = "#FF6F61",        
+  "Millenials" = "#F5F5DC",  
+  "GenX" = "#F7F9FC",        
+  "Baby Boomer" = "#A3C2E3", 
+  "Silent" = "#004B87"
+)
+
+# Hàm tạo pie chart 
+create_pie <- function(data, cluster_num) {
+  cluster_data <- data %>% filter(Cluster == cluster_num)
+
+  ggplot(cluster_data, aes(x = "", y = count, fill = age_group)) +
+    geom_bar(stat = "identity", width = 1, color = "white") +
+    coord_polar(theta = "y") +
+    scale_fill_manual(values = age_group_colors) +
+    geom_text(
+      aes(label = label),
+      position = position_stack(vjust = 0.5),
+      size = 4.2,
+      fontface = "bold",
+      color = "black"
+    ) +
+    labs(title = paste("Cluster", cluster_num), x = NULL, y = NULL) +
+    theme_void() +
+    theme(legend.position = "right")
+}
+
+# Tạo hai biểu đồ
+p1 <- create_pie(age_cluster_summary, 1)
+p2 <- create_pie(age_cluster_summary, 2)
+
+# Hiển thị song song
+grid.arrange(p1, p2, ncol = 2)
+
+
+
+```
+
+
+Có thể thấy được GenX (35-40) là nhóm tuổi chiếm tỷ trọng lớn nhất ở cả hai, đây là nhóm tuổi mà US airway có thể tiếp cận nhiều hơn trong tương lai bởi nhóm này có đặc điểm tốt về mặt tài chính, bên cạnh đó cũng có tỷ lệ trung thành với 1 lựa chọn nhiều hơn. Tuy nhiên nhóm này cũng khá khó tính về mặt chất lượng dịch vụ, hay lớn tuổi nên khả năng thành thạo công nghệ cũng kém, đây là điểm mà US Airways làm chưa tốt khi mà ở cụm 2 (nhóm chưa hài lòng lắm với khâu làm thủ tục, đặt vé và dịch vụ trên máy bay), số lượng khách hàng là nhiều hơn cụm 1, hay số lượng khách hàng lớn tuổi là nhiều hơn.
+,
+Bên cạnh đó, ở cụm 1, có thể thấy nhóm Millenials và GenZ nhiều hơn so với cụm 2, hay nói cách khác cụm 1 có nhiều khách hàng trẻ hơn so với cụm 2. Đây là nhóm tuổi trọng về mặt hình thức, nhưng với đặc điểm ở cụm 1 (không cảm thấy thoải mái với tiện nghi trên máy bay) thì có thể thấy được csvc của US airway chưa mang tính mới mẻ, cập nhật phù hợp với giới trẻ hiện nay, đáp ứng kì vọng của họ. Có thể do các model mà hãng sử dụng là cũ, hoặc cách bố trí chưa được tốt cho lắm.
+
+
+## Thời gian delay đi và đến
+
+Có thể thấy được giá trị trung bình cho thời gian delay đến và đi của khách hàng cả hai cụm là đều ở gần mức 0, như vậy hãng hàng không này cũng làm khá tốt trong việc đảm bảo sự đúng giờ với khách hàng. Một điểm đáng chú ý là ở nhóm cụm 1, thời gian delay tuy dao động dài hơn, nhưng họ đều vẫn đánh giá hài lòng nhẹ đối với mục thủ tục & đặt vé (dựa trên kết quả từ Cluster), như vậy nhóm này sẽ dễ tính hơn so với nhóm còn lại.
+
+
+```{r}
+# Đặt song song
+par(mfrow = c(1, 2))  
+
+# Boxplot Departure Delay
+boxplot(`Departure Delay` ~ Cluster, data = airline_data,
+        main = "Departure Delay by Cluster",
+        xlab = "Cluster",
+        ylab = "Departure Delay (minutes)",
+        col = "#B2E0D4",
+        frame = FALSE,
+        outline = FALSE,
+        ylim = c(-10, 50))
+
+# Boxplot Arrival Delay
+boxplot(`Arrival Delay` ~ Cluster, data = airline_data,
+        main = "Arrival Delay by Cluster",
+        xlab = "Cluster",
+        ylab = "Arrival Delay (minutes)",
+        col = "#F4C2C2",
+        frame = FALSE,
+        outline = FALSE,
+        ylim = c(-10, 50))
+
+```
+
+## Mức đánh giá chung của các cụm
+
+Bộ dữ liệu có biến mức đánh giá chung, là tổng hợp từ 14 câu hỏi về mức độ hài lòng của khách hàng, biến này bao gồm Satisfied (hài lòng) và No - Neutral (không - Trung lập). Phân dựa theo cụm và hạng vé, ta có kết quả như sau:
+
+
+```{r}
+library(grid)
+library(vcd)
+
+# Tạo bảng chéo
+tbl <- xtabs(~ Cluster + Class + Satisfaction, airline_data)
+ftable(tbl)
+
+# Vẽ đồ thị mosaic
+mosaic(tbl, 
+       shade = TRUE,
+       legend = TRUE,
+       labeling_args = list(
+         set_varnames = c(Cluster = "Cụm",
+                          Class = "Hạng hành khách",
+                          Satisfaction = "Mức hài lòng tổng thể (Neutral - Dissatisfied)"),
+         set_labels = list(
+           Cluster = c("1", "2"),
+           Class = c("Class Business", "Economy", "Economy Plus"),
+           Satisfaction = c("N-D", "S")
+         )
+       ),
+       main = "Mức đánh giá chung của các cụm"
+)
+```
+
+Ở cụm 1, khách hàng chủ yếu là ở hạng Economy. Bên cạnh đó, ở cả ba hạng vé đều có mức không hài lòng cho đến trung lập nhiều hơn, đặc biệt ở hai hạng Economy đều thấp hơn kỳ vọng. Với đặc điểm của cụm 1, có thể rút ra kết luận rằng, ở hạng Economy, hãng US airway chưa có cơ sở vật chất tốt, đáp ứng với nhu cầu và chi phí họ bỏ ra. Đây là điểm mà US airway cần cải thiện ở hai hạng vé này.
+
+Có thể thấy ở cụm 2, khách hàng hạng cao nhất là Class Business chiếm tỷ trọng lớn nhất. Điều này khá phù hợp với phân tích ở trên bởi đây là nhóm lớn tuổi hơn, có tiềm lực về tài chính. Bên cạnh đó, nhóm này có mức hài lòng chung cao hơn kỳ vọng ở hai hạng vé Economy. Tuy nhiên, ở nhóm Class Business, khách hàng vẫn có mức hài lòng chung thấp so với kỳ vọng. Đây là một điểm đáng chú ý mà US airway cần cải thiện, bởi đây là nhóm có đánh giá chưa hài lòng lắm với các thủ tục, đặt vé và dịch vụ trên máy bay => Cần cải thiện dịch vụ ở khoang hạng thương gia và có sự ưu tiên rõ rệt đối với khách ở hạng vé này.
+
+
+## Mức đánh giá của cụm trên từng mục câu hỏi
+
+Ở phần này sẽ xem xét so sánh thang điểm hài lòng của khách hàng hai cụm trên từng mục của hãng hàng không. Kết quả như sau: 
+
+```{r fig.height=8, fig.width=10, message=FALSE, warning=FALSE}
+library(fmsb)
+library(fmsb)
+library(RColorBrewer)
+library(scales)
+
+# Chọn cột thang đo (13–23)
+survey_cols <- colnames(airline_data)[11:23]
+
+# Trung bình theo cụm
+radar_avg <- aggregate(
+  x = airline_data[, survey_cols],
+  by = list(Cluster = airline_data$Cluster),
+  FUN = mean
+)
+
+# Chuẩn bị dữ liệu cho radar chart
+radar_scores <- radar_avg[, -1]
+rownames(radar_scores) <- paste0("Cluster ", radar_avg$Cluster)
+
+# Khai báo max và min của thang đo
+radar_data <- rbind(
+  rep(5, ncol(radar_scores)),
+  rep(1, ncol(radar_scores)),
+  radar_scores
+)
+
+# Ép kiểu numeric
+radar_data <- as.data.frame(lapply(radar_data, as.numeric))
+rownames(radar_data) <- c("Max", "Min", rownames(radar_scores))
+
+# Thiết lập màu 
+coul <- brewer.pal(3, "BuPu")
+colors_border <- coul[2:3]        # lấy hai màu
+colors_in <- alpha(colors_border, 0.5)
+
+# Vẽ radar chart 
+radarchart(
+  radar_data,
+  axistype = 1,
+  pcol = colors_border,
+  pfcol = colors_in,
+  plwd = 5,               
+  plty = 1,
+  cglcol = "grey",
+  cglty = 1,
+  axislabcol = "grey",
+  caxislabels = seq(1, 5, 1),
+  cglwd = 1.2,            
+  vlcex = 1.2           
+)
+
+#  Thêm chú thích 
+legend(
+  x = 0.7, y = 1,
+  legend = rownames(radar_data[-c(1, 2), ]),
+  bty = "n",
+  pch = 20,
+  col = colors_in,
+  text.col = "black",
+  cex = 1.4,              
+  pt.cex = 3
+)
+
+
+```
+
+
+Nhìn chung thì nhóm 1 đều có mức hài lòng tốt hơn đối với nhóm 2. Còn với nhóm 2 thì mức hài lòng kém hơn, đặc biệt là các mục thuộc thành phần chính thứ 2 và 3. Đây là nhóm khách hàng mà US airway cần phải tích cực chăm sóc hơn, như cải thiện chất lượng dịch vụ trên chuyến bay, đơn giản hóa các thủ tục hành trình và đặt vé, cũng như đưa ra nhiều ưu đãi hơn.
+
+
+# Kết luận
+
+Từ 14 biến thang đo mức độ hài lòng của khách hàng tại US airway ban đầu, bài nghiên cứu đã gộp lại thành 3 thành phần chính từ PCA: 
+
+ + TPC thứ nhất – "Comfort & Boarding Experience" (Sự thoải mái và tiện lợi khi bay).
+
+ + TPC thứ hai – "Logistics & Booking Convenience" (Thuận tiện Hành trình & Đặt vé). 
+
+ + TPC thứ ba – "In-flight Service & Amenities" (Chất lượng dịch vụ trên máy bay). 
+
+Tiếp đến sử dụng phương pháp K-means Clustering, tác giả đã phân cụm thành hai nhóm khách hàng:
+
+ + Cụm 1: Cabin discomfort (Không hài lòng về sự thoải mái và tiện lợi khi bay)
+
+ + Cụm 2: Booking and Services discomfort (Không hài lòng về thwaanj tiện hành trình, đặt vé và dịch vụ trên chuyến bay)
+ 
+Từ kết quả phân cụm, có thể nhận thấy khách hàng thuộc cụm 2 chiếm đa số (khoảng 56,8%), với đặc điểm hài lòng nhẹ về sự thoải mái và tiện nghi khi bay nhưng chưa hài lòng lắm với thủ tục đặt vé và dịch vụ online. Đây cũng là nhóm có tỷ lệ khách hàng trung thành cao hơn (87,8%), phần lớn thuộc độ tuổi 40–42, thường sử dụng hạng vé Business và có tiềm lực tài chính. Tuy nhiên, vì họ vẫn chưa thực sự hài lòng với các dịch vụ đi kèm và thủ tục bay, cho thấy US Airways cần cải thiện trải nghiệm khách hàng ở nhóm này, đặc biệt với dịch vụ dành cho khách lớn tuổi và hạng thương gia.
+
+Ngược lại, cụm 1 có tỷ lệ khách hàng trẻ hơn (nhiều Millenials và GenZ hơn, trung bình khoảng 36–37 tuổi), thường chọn hạng Economy và có xu hướng dễ tính hơn trong đánh giá dịch vụ. Tuy nhiên, họ lại chưa quá hài lòng với sự thoải mái và tiện nghi trên máy bay, điều này gợi ý rằng cơ sở vật chất và trải nghiệm bay chưa đáp ứng kỳ vọng của nhóm trẻ, vốn quan tâm nhiều đến tính hiện đại và thẩm mỹ.
+
+Nhìn chung, US Airways đã làm tốt ở yếu tố đúng giờ và có tệp khách hàng trung thành tương đối cao. Tuy nhiên, hãng cần chú trọng cải thiện dịch vụ đặt vé, thủ tục hành trình và nâng cấp trải nghiệm bay, đặc biệt ở các hạng Economy và Business, để đáp ứng tốt hơn kỳ vọng của từng nhóm khách hàng mục tiêu. Đồng thời, việc cá nhân hóa và ưu tiên trải nghiệm theo từng phân khúc tuổi và hạng vé sẽ là chiến lược hiệu quả để giữ chân khách hàng và nâng cao sự hài lòng trong tương lai.
