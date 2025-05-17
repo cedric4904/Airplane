@@ -3,6 +3,7 @@
 The data was taken from https://www.kaggle.com/datasets/johndddddd/customer-satisfaction
 I have performed PCA and Clustering analysis on this dataset to segment customers into 2 different groups, based on what they sastified about US Airline' service. After that, the groups were put into descriptive analysis to find out more about their characteristics. Hence, I came into conclusion on what US airways needs to improved and solutions for each group.
 
+HTML link: https://cedric4904.github.io/Airplane/
 
 About the dataset: 
 Context
