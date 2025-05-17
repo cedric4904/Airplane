@@ -1,0 +1,857 @@
+---
+title: "Phân cụm khách hàng US Airways"
+author: "Nguyen Phuong Nam"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Introduction
+
+In the increasingly competitive landscape of the airline industry, understanding customer satisfaction has become a key factor in improving service quality and retaining loyal customers. This study focuses on analyzing customer satisfaction with US Airways based on 14 factors related to the flight experience. By applying Principal Component Analysis (PCA), K-means clustering, and data visualization techniques, the research aims to identify distinct customer segments, uncover strengths and weaknesses in the current service, and propose specific and effective improvement strategies.
+
+# Data Preprocessing
+
+## About the Dataset
+
+
+The data was obtained from the open data source website *https://www.kaggle.com/datasets/johndddddd/customer-satisfaction* by John D. It describes customer satisfaction related to their flight experience with US Airways (USA), based on a survey conducted in 2015. The dataset's information is presented as follows:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(readr)
+desc <- "https://raw.githubusercontent.com/cedric4904/Airplane/refs/heads/main/data_dictionary.csv"
+data_dictionaty <- read_csv(desc)
+library(DT)
+datatable(data_dictionaty, caption = "Mô tả các biến trong tập dữ liệu")
+```
+
+## Data Import and Processing
+
+### Import Raw Data
+
+
+The data is directly updated from the *Kaggle* website. However, to ensure RStudio runs smoothly, the author has hosted it on *Github* as an intermediary (***Internet connection required when running***) to avoid potential errors when crawling the data.
+
+```{r message=FALSE, warning=FALSE}
+library(readr)
+url <- "https://raw.githubusercontent.com/cedric4904/Airplane/refs/heads/main/airline_passenger_satisfaction.csv"
+airline_data <- read_csv(url)
+```
+
+
+Descriptive stastistics is listed in the table below:
+
+```{r fig.width=10, warning=FALSE}
+library(skimr)
+skim(airline_data)
+```
+
+
+
+### Handle Missing Values
+
+
+As described above, the dataset used includes 24 variables with 129,880 corresponding observations. First, the author performed a check for missing values and found 393 observations containing missing data. As a result, these were removed from the dataset.
+
+```{r}
+colSums(is.na(airline_data))
+```
+
+
+```{r}
+airline_data <- na.omit(airline_data)
+sum(is.na(airline_data))
+```
+
+
+After that, the dataset no longer contained any missing values
+
+### Handle Duplicate Values
+
+
+Next, using the customer ID, the author removed duplicate entries from the dataset (observations appearing more than once were excluded).
+
+```{r}
+library(dplyr)
+airline_data$ID <- airline_data %>% distinct(airline_data$ID)
+```
+
+### Filter Variables for Analysis
+
+
+Based on the initial information from the dataset, the variables measuring customer satisfaction use a Likert scale (1–5). However, some responses are recorded as "0" – Not applicable, meaning no response was given. To ensure the accuracy and objectivity of the subsequent analyses, the author filtered out observations with values equal to 0, retaining only those greater than 0. As a result, the dataset was reduced to 119,204 observations.
+
+```{r}
+library(dplyr)
+airline_data <- airline_data %>%
+    filter(if_all(10:23, ~ .x > 0))
+```
+
+### Select 10% Sample from the Dataset
+
+With 119,204 observations in the dataset, performing subsequent analyses would be memory-intensive and could cause the system to freeze due to the large data volume and time-consuming computations. Therefore, the author opted to use a 10% random sample without replacement. After sampling, the dataset was reduced to approximately 11,920 observations.
+
+```{r}
+library(dplyr)
+set.seed(123)
+airline_data <- sample_frac(airline_data, size = 0.1) #chon khong hoan lai
+skim(airline_data)
+```
+
+# Dimensionality Reduction with PCA
+
+## Prepare Input Data for PCA
+
+
+Principal Component Analysis (PCA) is one of the multivariate data analysis techniques used in statistics to reduce data dimensionality. The aim of this method is to "condense" the data while minimizing information loss. It is applicable to quantitative variables or ordinal variables (such as those measured on a ranked scale).
+
+Given that the dataset uses a Likert scale from 1 to 5 (from "Very Dissatisfied" to "Very Satisfied"), applying PCA is entirely appropriate. The dataset includes 14 survey questions related to various aspects of customer satisfaction with the flight experience on US Airways. If K-means clustering (discussed later) were applied directly, the results could be significantly affected due to potential overlap or redundancy among these questions. Therefore, the author conducted PCA to reduce dimensionality and identify underlying latent factors before proceeding with more in-depth analysis.
+
+The filtered dataset, containing only the Likert-scale variables, is named "data".
+
+```{r}
+library(dplyr)
+data <- airline_data %>% select(10:23)
+head(data)
+```
+
+## Check Data Suitability for Analysis
+
+### Correlation Coefficient
+
+To apply PCA, the variables must be correlated with each other. If the correlation coefficients between variables are low, PCA is not appropriate. Therefore, before performing PCA, it is necessary to preliminarily assess the correlations among the variables. The results are presented in the following chart:
+
+```{r fig.height=8, fig.width=10, message=FALSE, warning=FALSE}
+library(corrplot)
+
+# Tính ma trận tương quan
+cor_mat <- cor(data, use = "complete.obs")
+
+# Vẽ heatmap
+corrplot(cor_mat, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45,tl.cex = 0.6, addCoef.col = "black", number.cex = 0.7,
+         col = colorRampPalette(c("blue", "white", "red"))(200))
+```
+
+
+It can be observed that the in-flight service group—*Food and Drink*, *In-flight Service*, *In-flight Entertainment*, *Cleanliness*, and *Seat Comfort*—have moderate to fairly strong correlations with each other (ranging from 0.4 to 0.7), especially between *Seat Comfort* and *Cleanliness*, which is around 0.7. In contrast, although correlations are lower, there is still a certain connection within the booking and procedure group—*Ease of Online Booking*, *Departure Time*, and *Gate Location*—which show low but present correlations. This preliminary assessment suggests that after performing PCA, more than one principal component is likely to emerge.
+
+
+### Bartlett’s Test and KMO Measure
+
+However, when the sample size is large, as in the dataset being analyzed, correlation coefficients tend to decrease. Moreover, in PCA, besides checking the correlation coefficients among variables, it is also necessary to assess the correlation between variables and latent factors (principal components). Therefore, the author uses Bartlett’s test and the KMO (Kaiser-Meyer-Olkin) measure with the following criteria:
+
+ + The KMO coefficient must be at least 0.5 (0.5 ≤ KMO ≤ 1), indicating that exploratory factor analysis is appropriate for the dataset (Hill, 2011).
+
+ + Bartlett’s test should be statistically significant (Sig. value < 0.05), meaning that the observed variables have linear correlations with the underlying factors.
+
+-- Bartlett’s Test 
+
+```{r message=FALSE, warning=FALSE}
+library(psych)
+cortest.bartlett(data)
+```
+
+-- KMO coefficent
+
+```{r}
+KMO(data)
+```
+
+Bartlett’s test returned a very small p-value (approximately 0), and the overall KMO coefficient (Overall MSA) was 0.78 (> 0.5). The KMO values for each individual variable (MSA for each item) were also all above 0.7. Therefore, there is sufficient evidence to conclude that the dataset is suitable for PCA analysis.
+
+## Perform PCA
+
+### Select Number of Principal Components to Retain
+
+The criteria for selecting the number of principal components (PCs) are as follows:
+
+ + Eigenvalues must be greater than the average value; for data input as a correlation matrix, eigenvalues should be greater than 1. Here, since the PCA function automatically uses the correlation matrix, eigenvalues greater than 1 are retained.
+
+ + Elbow method: The number of principal components is determined at the point after which the remaining eigenvalues are approximately equal and relatively small (Jolliffe, 2002; Peres-Neto et al., 2005).
+
+ + The cumulative percentage of variance explained by the selected principal components should be greater than 50%.
+
+The PCA results are presented as follows:
+
+```{r message=FALSE, warning=FALSE}
+library(FactoMineR)
+library(factoextra)
+res.pca <- PCA(data, graph = FALSE)
+summary(res.pca)
+```
+
+
+```{r}
+fviz_eig(res.pca, addlabels = TRUE, ylim = c(0, 50))
+```
+
+
+-- Looking at the **Eigenvalue** section, we have the following information:
+
+ + The eigenvalues of the first 4 dimensions are all greater than 1.
+
+ + However, from the Cumulative % of Variance row, by the 3rd dimension, the percentage of variance explained reaches approximately 60.675% (> 50%). In other words, the first 3 principal components effectively explain the 14 input variables. This is also clearly shown in the Scree plot, where from the 4th dimension onward, the percentage of explained variance remains relatively similar.
+
+Therefore, the author decides to retain only 3 principal components.
+
+
+### Group Original Variables into Principal Components
+
+As mentioned above, the author decided to retain 3 principal components. To classify the original 14 variables into these principal components, the author used the **contribute** values extracted from the variables section. The contribution (CTR) indicates the extent to which a variable contributes to a principal component. To evaluate whether a variable contributes more or less to a specific component, the CTR values across the 3 principal components are compared. The highest CTR value means that the variable contributes most significantly to that component, providing a basis to assign the variable to the corresponding principal component. The results are presented as follows:
+
+
+```{r}
+#Lấy giá trị contribute
+var <- get_pca_var(res.pca)
+var$contrib[,1:3]
+```
+
+
+```{r}
+fviz_contrib(res.pca, choice = "var", axes = 1)
+fviz_contrib(res.pca, choice = "var", axes = 2)
+fviz_contrib(res.pca, choice = "var", axes = 3)
+```
+
+
+Based on the obtained results, the author separated and named the 3 principal components (PCs) as follows:
+
+-- Dim.1 – "Comfort & Boarding Experience" (Sự thoải mái và tiện lợi khi bay), including variables:
+
++ Check-in Service
+
++ Online Boarding
+
++ Seat Comfort
+
++ Cleanliness
+
++ In-flight Entertainment
+
+-- Dim.2 – "Logistics & Booking Convenience" (Thuận tiện Hành trình & Đặt vé), including variables:
+
++ Departure and Arrival Time
+
++ Ease of Online Booking
+
++ Gate Location
+
++ In-flight Wifi Service
+
+-- Dim.3 – "In-flight Service & Amenities" (Chất lượng dịch vụ chuyến bay), including variables:
+
++ On-board Service
+
++ Leg Room Service
+
++ Food and Drink
+
++ In-flight Service
+
++ Baggage Handling
+
+### Transforming the original data into the new principal component space
+
+With the original data being ordinal, there are two methods to transform the data into the new principal component space (*NEU Data Analysis, 2022*). The author chose the method of calculating the principal components by multiplying the eigenvector by the centered or standardized transposed data. According to this method, the new values are standardized scores with a mean of zero; in other words, the data is normalized.
+
+To facilitate the subsequent K-means clustering analysis (which requires normalized input data), the author will use this calculation approach. The multiplication results have been precomputed by the PCA function and are presented in the **UIndividual** section. The transformed values of the first 6 observations are as follows:
+
+
+```{r}
+res.ind <- get_pca_ind(res.pca)  # lấy thông tin mục individual
+pc_scores_3d <- as.data.frame(res.ind$coord[, 1:3])  # chỉ lấy 3 thành phần đầu
+head(pc_scores_3d)
+```
+
+After extracted to 3 new dimensions, it would be saved to new dataset with the name **pc_scores_3d**.
+
+# Customer Clustering Using K-means
+
+
+Proposed by J. MacQueen in *Some Methods for Classification and Analysis of Multivariate Observations* (1967), cluster analysis refers to a group of multivariate techniques aimed at dividing a population (or sample) into groups (clusters) such that the objects within the same group are relatively homogeneous based on selected characteristics. Each cluster exhibits high internal similarity and significant differences compared to other clusters.
+
+In this study, the author aims to segment customer groups in order to propose measures to improve the service and flight quality of US Airways, thereby enhancing business performance. However, since the number of variables used for analysis is 14, this could significantly affect clustering results. Therefore, the author performed dimensionality reduction earlier by grouping similar questions together, and then clusters customers based on their satisfaction levels with these grouped experiences.
+
+Thus, in this section, the author uses the 3 principal components extracted earlier to cluster more than 11,000 original customers based on similarity. The clustering method employed is K-means, a partitioning clustering technique suitable for quantitative data or ordinal data with ranked scales.
+
+
+## Check Data Suitability
+
+
+To determine whether the data is suitable for cluster analysis, the author used the Hopkins statistic. The criterion is that the value should be greater than 0.5. The Hopkins index evaluates the cluster tendency of the data, and distance matrices are also plotted. The Hopkins statistic ranges between [-1, 1], with values closer to 1 indicating a stronger tendency for the dataset to form clusters.
+
+However, because the dataset is quite large (~12,000 observations), the Hopkins test can be less effective or sensitive with such a big sample. Therefore, the author took a random sample of about 1,000 observations to perform the test.
+
+
+```{r warning=FALSE}
+
+library(hopkins)
+library (cluster)
+library (factoextra)
+library (fpc)
+ 
+# Lấy ngẫu nhiên 1000 dòng để tính Hopkins 
+set.seed(42)  
+sample_indices <- sample(1:nrow(pc_scores_3d), 1000)
+subset_data <- pc_scores_3d[sample_indices, ]
+
+library(hopkins)
+hopkins(subset_data)
+```
+
+The Hopkins statistic is close to 1, indicating that the data is suitable for K-means clustering analysis.
+
+## Select Optimal Number of Clusters
+
+For the partitioning clustering method, to select an appropriate number of clusters, the author combines the following three methods:
+
+ + Visual inspection of the distances between clusters
+ + Silhouette plot
+ + Elbow method (Scree plot)
+
+The author does not use the Gap statistic method because the large dataset requires substantial memory for its calculation, making it difficult to perform. The results are presented as follows:
+
+
+-- Visualization
+
+```{r message=FALSE, warning=FALSE}
+kmean_calc <- function(df, k){
+  kmeans(df, centers = k, nstart = 30)
+}
+km2 <- kmean_calc(pc_scores_3d, 2)
+km3 <- kmean_calc(pc_scores_3d, 3)
+km4 <- kmean_calc(pc_scores_3d, 4)
+km5 <- kmean_calc(pc_scores_3d, 5)
+km6 <- kmean_calc(pc_scores_3d, 6)
+km7 <- kmean_calc(pc_scores_3d, 7)
+ 
+p1 <- fviz_cluster(km2, data = pc_scores_3d, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 2") 
+p2 <- fviz_cluster(km3, data = pc_scores_3d, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 3")
+p3 <- fviz_cluster(km4, data = pc_scores_3d, ellipse.type= "convex") + theme_minimal() + ggtitle("k = 4")
+p4 <- fviz_cluster(km5, data = pc_scores_3d, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 5")
+p5 <- fviz_cluster(km6, data = pc_scores_3d, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 6")
+p6 <- fviz_cluster(km7, data = pc_scores_3d, ellipse.type = "convex") + theme_minimal() + ggtitle("k = 7")
+ 
+library(cowplot)
+ 
+library(ggplot2)
+ 
+ 
+plot_grid(p1, p2, p3, p4, p5, p6, labels = c("k2", "k3", "k4", "k5", "k6", "k7")) 
+```
+
+-- Elbow and Silhouette
+
+```{r message=FALSE, warning=FALSE}
+# vẽ đồ thị xác định số cụm
+## Dựa vào Elbow
+fviz_nbclust(pc_scores_3d, kmeans, method = "wss", k.max = 10) + theme_minimal() + ggtitle("the Elbow Method")
+ 
+### pp Silhouette
+fviz_nbclust(pc_scores_3d, kmeans, method = "silhouette", k.max = 10) + theme_minimal() + ggtitle("The Silhouette Plot")
+```
+
+
+First, looking at the visual plots of cluster separations for different numbers of clusters (ranging from 2 to 7), it is evident that k = 2 and k = 3 are optimal since the observations are well separated without much overlap. Next, the Elbow plot shows a clear bend at clusters 2 and 3. Finally, the Silhouette coefficient indicates that k = 2 is the best choice.
+
+However, since the author aims to segment into 3 clusters corresponding to the 3 extracted principal components, the subsequent analysis will compare k = 2 and k = 3.
+
+The best cluster number will be selected based on the following criteria:
+
+ + Average Silhouette coefficient — the closer to 1, the better
+
+ + Dunn index — the higher, the better
+
+ + BSS/TSS ratio — the proportion of between-group variance to total variance; a higher ratio indicates more distinct clusters, meaning better clustering quality
+
+The results are presented as follows:
+
+
+```{r}
+kmean3<- kmeans (pc_scores_3d, centers=3, nstart=10)# 3 cụm(nstart represents the number of random data sets used to run the algorithm)
+str(kmean3)
+summary(kmean3)
+# Hiển thị thông tin tổng quan:
+cat("Within-cluster sum of squares:\n")
+print(kmean3$withinss)
+
+cat("\nCluster centers:\n")
+print(kmean3$centers)
+
+cat("\nSize of each cluster:\n")
+print(kmean3$size)
+```
+
+
+```{r}
+k_stats3 <- cluster.stats(dist(pc_scores_3d), kmean3$cluster)
+k_stats3
+```
+
+
+```{r}
+kmean2<- kmeans (pc_scores_3d, centers=2, nstart=10)# 2 cụm(nstart represents the number of random data sets used to run the algorithm)
+str(kmean2)
+summary(kmean2)
+# Hiển thị thông tin tổng quan:
+cat("Within-cluster sum of squares:\n")
+print(kmean2$withinss)
+
+cat("\nCluster centers:\n")
+print(kmean2$centers)
+
+cat("\nSize of each cluster:\n")
+print(kmean2$size)
+```
+
+
+```{r}
+k_stats2 <- cluster.stats(dist(pc_scores_3d), kmean2$cluster)
+k_stats2
+```
+
+
+```{r fig.width=12, message=FALSE, warning=FALSE}
+plotk2 <- fviz_cluster(kmean2, data = pc_scores_3d, geom = "point", eclipse.type = "convex", repel = TRUE)
+plotk3 <- fviz_cluster(kmean3, data = pc_scores_3d, geom = "point", eclipse.type = "convex", repel = TRUE)
+
+#
+library(gridExtra)
+grid.arrange(plotk2, plotk3, ncol = 2)
+```
+
+
+-- Final choice of k
+
+According to the criteria above, the results are listed as follows:
+
+For **k = 3**:
+
+ + Dunn index: 1.247535
+
+ + Silhouette coefficient: 0.2864618
+
+ + BSS/TSS ratio: 48.6 % *
+
+For **k = 2**:
+
+ + Dunn index: 1.473734 *
+
+ + Silhouette coefficient: 0.3217819 *
+
+ + BSS/TSS ratio: 34.7 %
+
+*Note: The better optimal values are marked with * *
+
+Thus, **k = 2** meets more criteria. Although with k = 3 the clusters are more separated, the clustering quality is worse. Moreover, from the visual plot, it can be seen that observations in k = 2 are also well separated without overlap. Therefore, the number of customer clusters will be 2.
+
+-- Cluster naming
+
+Based on the Cluster means values, which are the coordinates of the cluster centers, as follows:
+
+Cluster means:
+
+Cluster means:
+
+      Dim.1      Dim.2       Dim.3          Cluster
+      
+1 *-1.890133*  0.2323996  0.09481776           1
+
+2  1.450671  *-0.1783660* **-0.07277235**      2
+
+
+
+**For Cluster 1 (Cluster 1)**
+
++ Dim.1 = -1.89: very low. Thus, customers in this cluster rate poorly on **Comfort and Convenience of Flying**, including:
+
+Check-in Service
+
+Online Boarding
+
+Seat Comfort
+
+Cleanliness
+
+In-flight Entertainment
+
++ Dim 2 = 0.2323996 and Dim 3 = 0.09481776: opposite to Dim 1, so customers in this cluster have moderate to mild satisfaction with **Journey Convenience & Booking** and **In-flight Service Quality**
+
+***=> Cluster Name: Cabin discomfort***: This is the group of customers who are clearly dissatisfied with comfort and convenience when boarding the plane, although they still accept the booking and in-flight service aspects.
+
+
+**For Cluster 2, the results are generally opposite, specifically:**
+
++ Dim 1 = 1.450671: good rating for **Comfort and Convenience of Flying**
+
++ Dim 2 = -0.1783660 and Dim 3 = -0.07277235: this group is less satisfied with booking procedures and in-flight services.
+
+***=> Cluster Name: Booking and Services discomfort***: This group is quite satisfied with comfort and convenience when flying but less satisfied with booking procedures and in-flight services.
+
+
+-- Assign cluster labels to the original dataset
+
+```{r}
+# Thêm nhãn cụm vào dữ liệu PCA
+pc_scores_3d$Cluster <- kmean2$cluster
+# Gắn nhãn cụm vào dữ liệu ban đầu (airline_data)
+airline_data$Cluster <- pc_scores_3d$Cluster
+# Kiểm tra sự phân bố của biến "Satisfaction" theo cụm
+table(airline_data$Cluster, airline_data$Satisfaction)
+
+# Kiểm tra mô tả các biến khác theo cụm
+summary(airline_data[airline_data$Cluster == 1, ])  # Dữ liệu của cụm 1
+summary(airline_data[airline_data$Cluster == 2, ])  # Dữ liệu của cụm 2
+
+```
+
+
+# Cluster Characteristics Analysis
+
+
+In this section, after clustering, the author will analyze some common characteristics of each cluster. From there, conclusions and final recommendations will be drawn.
+
+First, we need to convert the cluster variable into a factor type so that it can be classified as follows:
+
+```{r echo=TRUE}
+airline_data$Cluster <- as.factor(airline_data$Cluster)
+```
+
+## Number of Customers in Each Cluster
+
+
+It can be seen that the number of customers in cluster 2 is greater than that in cluster 1, with a significant difference of over 1,000 people. Thus, among nearly 12,000 surveyed customers, about 56.8% are strongly satisfied with the Comfort and Convenience of flying with US airline, but are less satisfied with the booking process or online services.
+
+
+```{r}
+library(ggplot2)
+ggplot(airline_data, aes(x=Cluster))+
+  geom_bar(fill="white",color="black")+
+  geom_text(stat = "count", aes(label = ..count..), vjust = -0.5) +
+  labs(x="Cụm", 
+      y="Số khách hàng",
+      title=" Số lượng khách hàng ở trong mỗi cụm") +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+## Common Customer Types in Each Cluster
+
+
+The proportion of returning customers (i.e., those who have used US airline’s services more than twice) is calculated as follows:
+
+ + Cluster 1: 78.6%
+
+ + Cluster 2: 87.8%
+
+Thus, cluster 2 has a higher loyalty rate, and this group feels quite satisfied with the Comfort and Convenience of flying. This could be one of the main factors attracting customers to return and use the airline’s services again. 
+
+```{r}
+library(ggplot2)
+
+ggplot(airline_data, aes(x =Cluster, fill = `Customer Type`)) +
+    geom_bar(position = "dodge") + #các cột đặt cạnh nhau
+    geom_text(
+        stat = "count",
+        aes(label = ..count..),
+        position = position_dodge(width = 0.9), #Đảm bảo số nằm trên đúng cột tương ứng
+        vjust = -0.25 #Đặt nhãn lên phía trên đầu cột
+    ) +
+    labs(
+        x = "Cụm",
+        y = "Số lượng",
+        fill = "Loại khách hàng"
+    ) +
+    theme_minimal()
+```
+
+## Average Age of Two Clusters
+
+Overall, customers in cluster 1 tend to be slightly younger, mostly around 36-37 years old. Meanwhile, the other group is aged around 40-42 years old. From this, an insight can be drawn that booking procedures and services might still be less accessible to older customers, or the in-flight services are not yet sufficient to meet their needs (a characteristic of cluster 2).
+
+
+```{r}
+boxplot(Age ~ Cluster, data = airline_data, main = "Average Age by cluster", frame = FALSE, names=c("Cluster 1", "Cluster2"), col=c("#B2E0D4","#F4C2C2"))
+```
+
+## Age Groups in Each Cluster
+
+First of all, the author based the age group classification of customers on information from the U.S. Census Bureau. Link: (https://www.beresfordresearch.com/age-range-by-generation/)
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Thông tin về các nhóm tuổi
+generation_table <- data.frame(
+  "Thế hệ" = c("Silent", "Baby Boomer", "Gen X", "Millennial", "Gen Z"),
+  "Năm sinh" = c("<=1945", "1946–1964", "1965–1980", "1981–1996", "1997–2008"),
+  "Độ tuổi năm 2015" = c(">=70", "51–69", "35–50", "19–34", "7–18"),
+  check.names = FALSE
+)
+
+# Hiển thị bảng
+library(gt)
+
+generation_table %>%
+  gt() %>%
+  tab_header(title = "Bảng nhóm thế hệ và độ tuổi tương ứng (năm 2015)")
+```
+
+
+After that, two pie charts was created to display the proportion of every generation label in each customer clustering group. 
+
+```{r}
+# Tao bien
+airline_data <- airline_data %>%
+  mutate(age_group = case_when(
+    Age >= 7 & Age <= 18 ~ "GenZ",
+    Age > 18 & Age <= 34 ~ "Millenials",
+    Age > 34 & Age <= 50 ~ "GenX",
+    Age > 50 & Age <= 69 ~ "Baby Boomer",
+    Age > 69 ~ "Silent",
+     TRUE ~ NA_character_ ),
+    .before = 4)
+
+#Sap xep thu tu
+airline_data$age_group <- factor(airline_data$age_group, 
+                                 levels = c("GenZ", "Millenials", "GenX", "Baby Boomer", "Silent"))
+
+# kiem tra co Na khong
+sum(is.na(airline_data$age_group))
+
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+
+# Tính toán dữ liệu
+age_cluster_summary <- airline_data %>%
+  group_by(Cluster, age_group) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(Cluster) %>%
+  mutate(
+    percentage = count / sum(count) * 100,
+    label = ifelse(percentage < 5, "", paste0(round(percentage, 1), "%")) #Để lúc sau hiện trên pie chart các giá trị nhỏ không bị overlap
+  ) %>%
+  ungroup()
+
+# Màu sắc theo nhóm tuổi
+age_group_colors <- c(
+  "GenZ" = "#FF6F61",        
+  "Millenials" = "#F5F5DC",  
+  "GenX" = "#F7F9FC",        
+  "Baby Boomer" = "#A3C2E3", 
+  "Silent" = "#004B87"
+)
+
+# Hàm tạo pie chart 
+create_pie <- function(data, cluster_num) {
+  cluster_data <- data %>% filter(Cluster == cluster_num)
+
+  ggplot(cluster_data, aes(x = "", y = count, fill = age_group)) +
+    geom_bar(stat = "identity", width = 1, color = "white") +
+    coord_polar(theta = "y") +
+    scale_fill_manual(values = age_group_colors) +
+    geom_text(
+      aes(label = label),
+      position = position_stack(vjust = 0.5),
+      size = 4.2,
+      fontface = "bold",
+      color = "black"
+    ) +
+    labs(title = paste("Cluster", cluster_num), x = NULL, y = NULL) +
+    theme_void() +
+    theme(legend.position = "right")
+}
+
+# Tạo hai biểu đồ
+p1 <- create_pie(age_cluster_summary, 1)
+p2 <- create_pie(age_cluster_summary, 2)
+
+# Hiển thị song song
+grid.arrange(p1, p2, ncol = 2)
+
+
+
+```
+
+
+It can be seen that Gen X (ages 35-40) is the largest age group in both clusters. This group represents a key segment that US Airways can target more in the future, as they tend to have strong financial capacity and also show higher loyalty to a preferred choice. However, this group can be quite demanding regarding service quality and, being older, may have less proficiency with technology. This is an area where US Airways has not performed well, as evidenced in Cluster 2 (the group less satisfied with booking procedures and in-flight services), which has a larger number of customers than Cluster 1, particularly more older customers.
+
+Moreover, in Cluster 1, there are noticeably more Millennials and Gen Z customers compared to Cluster 2. In other words, Cluster 1 has a younger customer base. This age group places more emphasis on form and aesthetics, but given the characteristics of Cluster 1 (not feeling comfortable with onboard amenities), it suggests that US Airways’ facilities are not yet modern or updated enough to meet the expectations of today’s younger generation. This might be due to using older models or suboptimal layout arrangements.
+
+
+
+## Arrival and Departure Delay Times
+
+It can be seen that the average delay times for both arrival and departure across customers in both clusters are close to zero. This indicates that the airline performs quite well in ensuring punctuality for its customers. An interesting point is that in Cluster 1, although the delay times vary over a wider range, customers still show mild satisfaction with the check-in and booking procedures (based on the Cluster results). This suggests that this group tends to be more forgiving compared to the other cluster.
+
+
+```{r}
+# Đặt song song
+par(mfrow = c(1, 2))  
+
+# Boxplot Departure Delay
+boxplot(`Departure Delay` ~ Cluster, data = airline_data,
+        main = "Departure Delay by Cluster",
+        xlab = "Cluster",
+        ylab = "Departure Delay (minutes)",
+        col = "#B2E0D4",
+        frame = FALSE,
+        outline = FALSE,
+        ylim = c(-10, 50))
+
+# Boxplot Arrival Delay
+boxplot(`Arrival Delay` ~ Cluster, data = airline_data,
+        main = "Arrival Delay by Cluster",
+        xlab = "Cluster",
+        ylab = "Arrival Delay (minutes)",
+        col = "#F4C2C2",
+        frame = FALSE,
+        outline = FALSE,
+        ylim = c(-10, 50))
+
+```
+
+## Overall Satisfaction Scores of Clusters
+
+The dataset includes a overall satisfaction variable, which is an average of 14 questions regarding customer satisfaction levels. This variable consists of two categories: Satisfied and No - Neutral. When analyzed by cluster and ticket class, the results are as follows:
+
+
+```{r}
+library(grid)
+library(vcd)
+
+# Tạo bảng chéo
+tbl <- xtabs(~ Cluster + Class + Satisfaction, airline_data)
+ftable(tbl)
+
+# Vẽ đồ thị mosaic
+mosaic(tbl, 
+       shade = TRUE,
+       legend = TRUE,
+       labeling_args = list(
+         set_varnames = c(Cluster = "Cụm",
+                          Class = "Hạng hành khách",
+                          Satisfaction = "Mức hài lòng tổng thể (Neutral - Dissatisfied)"),
+         set_labels = list(
+           Cluster = c("1", "2"),
+           Class = c("Class Business", "Economy", "Economy Plus"),
+           Satisfaction = c("N-D", "S")
+         )
+       ),
+       main = "Mức đánh giá chung của các cụm"
+)
+```
+
+
+In Cluster 1, most customers belong to the Economy class. Additionally, across all three ticket classes, the proportion of customers who are neutral or dissatisfied is higher, especially in the two Economy classes, where satisfaction levels fall below expectations. Given the characteristics of Cluster 1, it can be concluded that in the Economy class, US Airways has yet to provide facilities that meet customers' needs and the costs they pay. This is an area that US Airways needs to improve for these two ticket classes.
+
+In Cluster 2, customers in the highest class, Business Class, account for the largest proportion. This aligns well with the previous analysis since this group tends to be older and financially stronger. Moreover, this group shows overall satisfaction levels above expectations for the two Economy classes. However, in the Business Class group, customers still exhibit overall satisfaction levels below expectations. This is a notable issue that US Airways needs to address, as this group was identified as less satisfied with procedures, booking, and in-flight services — indicating a need to improve services in the business class cabin and to offer clear prioritization for customers in this ticket class.
+
+
+## Cluster Satisfaction Scores on Each Survey Item
+
+In this section, we will compare the satisfaction scores of customers in the two clusters across each category of the airline. The results are as follows:
+
+```{r fig.height=8, fig.width=10, message=FALSE, warning=FALSE}
+library(fmsb)
+library(fmsb)
+library(RColorBrewer)
+library(scales)
+
+# Chọn cột thang đo (13–23)
+survey_cols <- colnames(airline_data)[11:23]
+
+# Trung bình theo cụm
+radar_avg <- aggregate(
+  x = airline_data[, survey_cols],
+  by = list(Cluster = airline_data$Cluster),
+  FUN = mean
+)
+
+# Chuẩn bị dữ liệu cho radar chart
+radar_scores <- radar_avg[, -1]
+rownames(radar_scores) <- paste0("Cluster ", radar_avg$Cluster)
+
+# Khai báo max và min của thang đo
+radar_data <- rbind(
+  rep(5, ncol(radar_scores)),
+  rep(1, ncol(radar_scores)),
+  radar_scores
+)
+
+# Ép kiểu numeric
+radar_data <- as.data.frame(lapply(radar_data, as.numeric))
+rownames(radar_data) <- c("Max", "Min", rownames(radar_scores))
+
+# Thiết lập màu 
+coul <- brewer.pal(3, "BuPu")
+colors_border <- coul[2:3]        # lấy hai màu
+colors_in <- alpha(colors_border, 0.5)
+
+# Vẽ radar chart 
+radarchart(
+  radar_data,
+  axistype = 1,
+  pcol = colors_border,
+  pfcol = colors_in,
+  plwd = 5,               
+  plty = 1,
+  cglcol = "grey",
+  cglty = 1,
+  axislabcol = "grey",
+  caxislabels = seq(1, 5, 1),
+  cglwd = 1.2,            
+  vlcex = 1.2           
+)
+
+#  Thêm chú thích 
+legend(
+  x = 0.7, y = 1,
+  legend = rownames(radar_data[-c(1, 2), ]),
+  bty = "n",
+  pch = 20,
+  col = colors_in,
+  text.col = "black",
+  cex = 1.4,              
+  pt.cex = 3
+)
+
+
+```
+
+
+Overall, Group 1 has higher satisfaction levels compared to Group 2. Meanwhile, Group 2 shows lower satisfaction, especially in the categories belonging to the second and third principal components. This is the customer group that US Airways needs to pay more attention to, such as improving in-flight service quality, simplifying travel procedures and ticket booking, as well as offering more incentives.
+
+
+# Conclusion
+
+From the original 14 customer satisfaction measurement variables at US Airways, the study consolidated them into 3 principal components (PCs) using PCA:
+
+PC1 – "Comfort & Boarding Experience"
+
+PC2 – "Logistics & Booking Convenience"
+
+PC3 – "In-flight Service & Amenities"
+
+Next, applying K-means clustering, the author segmented customers into two groups:
+
+Cluster 1: Cabin discomfort (Dissatisfied with comfort and convenience during the flight)
+
+Cluster 2: Booking and Services discomfort (Dissatisfied with booking convenience, travel logistics, and in-flight services)
+
+From the clustering results, it is evident that Cluster 2 accounts for the majority (around 56.8%), characterized by mild satisfaction with comfort and convenience during the flight but dissatisfaction with booking procedures and online services. This group also has a higher loyalty rate (87.8%), is mostly aged 40–42, frequently flies Business class, and has strong financial capacity. However, since they are still not fully satisfied with ancillary services and travel procedures, US Airways needs to improve customer experience for this segment, especially regarding services for older passengers and Business class customers.
+
+In contrast, Cluster 1 contains younger customers (more Millennials and Gen Z, averaging about 36–37 years old), who mostly choose Economy class and tend to be more lenient in service evaluations. However, they are less satisfied with comfort and amenities on the plane, suggesting that the airline’s facilities and flight experience have not met the expectations of this younger group, who tend to value modernity and aesthetics.
+
+Overall, US Airways performs well in punctuality and maintains a relatively loyal customer base. However, the airline should focus on improving booking services, travel procedures, and enhancing the flight experience, particularly in Economy and Business classes, to better meet the expectations of each target customer segment. Additionally, personalizing and prioritizing experiences according to age groups and ticket classes will be an effective strategy to retain customers and increase satisfaction in the future.
